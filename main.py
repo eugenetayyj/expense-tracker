@@ -582,6 +582,7 @@ async def start_bot():
         # Initialize the bot application
         logging.info("Telegram bot setup starts here...")
         token = os.getenv("TELEGRAM_TOKEN")
+        global application
         application = Application.builder().token(token).build()
 
         # Add your handlers
@@ -592,10 +593,11 @@ async def start_bot():
         application.add_handler(CommandHandler("cancel", global_cancel))
 
         # Set the webhook URL
-        webhook_url = os.getenv("WEBHOOK_URL")  # Ensure you set this environment variable
-        await application.bot.set_webhook(webhook_url)
+        await application.initialize()
+        # webhook_url = os.getenv("WEBHOOK_URL")  # Ensure you set this environment variable
+        # # await application.bot.set_webhook(webhook_url)
 
-        logging.info(f"Webhook set to {webhook_url}")
+        # # logging.info(f"Webhook set to {webhook_url}")
 
         # Return the application instance for further processing
         return application
