@@ -13,10 +13,14 @@ bot_app = None
 @app.on_event("startup")
 async def startup():
     global bot_app
-    bot_app = await start_bot()
-    logging.info("Bot started successfully.")
-
-
+    try:
+        bot_app = await start_bot()
+        if bot_app is None:
+            raise RuntimeError("Bot failed to initialize.")
+        logging.info("Bot started successfully.")
+    except Exception as e:
+        logging.error(f"Startup error: {e}")
+        raise
 @app.post("/webhook")
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming updates from Telegram."""
