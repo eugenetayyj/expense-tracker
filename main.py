@@ -13,9 +13,6 @@ logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
-expenses = None
-analysis = None
-
 def decrypt_credentials():
     try:
         # Load the decryption key from the environment variable
@@ -56,7 +53,7 @@ def setup_google_sheets():
 
         # Authorize the client
         client = gspread.authorize(creds)
-        
+        global expenses, analysis
         # Access the worksheets
         expenses = client.open('Expense Tracker').worksheet('expenses')
         analysis = client.open('Expense Tracker').worksheet('analysis')
@@ -574,18 +571,34 @@ table_expenses_handler = ConversationHandler(
 
 
 # Main bot setup
-def main():
-    expenses, analysis = setup_google_sheets()
-    logging.info("Telegram bot setup starts here...")
-    token = os.getenv("TELEGRAM_TOKEN")
-    application = Application.builder().token(token).build()
+async def start_bot():
+    """
+    Initialize and start the Telegram bot in webhook mode.
+    """
+    try:
+        # Set up Google Sheets
+        setup_google_sheets()
 
-    application.add_handler(add_expense_handler)
-    application.add_handler(query_expenses_handler)
-    application.add_handler(CommandHandler("summary", summary))
-    application.add_handler(table_expenses_handler)
-    application.add_handler(CommandHandler("cancel", global_cancel))
-    application.run_polling()
+        # Initialize the bot application
+        logging.info("Telegram bot setup starts here...")
+        token = os.getenv("TELEGRAM_TOKEN")
+        application = Application.builder().token(token).build()
 
-if __name__ == "__main__":
-    main()
+        # Add your handlers
+        application.add_handler(add_expense_handler)
+        application.add_handler(query_expenses_handler)
+        application.add_handler(CommandHandler("summary", summary))
+        application.add_handler(table_expenses_handler)
+        application.add_handler(CommandHandler("cancel", global_cancel))
+
+        # Set the webhook URL
+        webhook_url = os.getenv("WEBHOOK_URL")  # Ensure you set this environment variable
+        await application.bot.set_webhook(webhook_url)
+
+        logging.info(f"Webhook set to {webhook_url}")
+
+        # Return the application instance for further processing
+        return application
+    except Exception as e:
+        logging.error(f"Failed to start the bot: {e}")
+        raise
