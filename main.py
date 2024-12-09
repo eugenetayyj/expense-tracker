@@ -573,34 +573,31 @@ table_expenses_handler = ConversationHandler(
 # Main bot setup
 async def start_bot():
     """
-    Initialize and start the Telegram bot in webhook mode.
+    Initialize and start the Telegram bot.
     """
     try:
-        # Set up Google Sheets
+        logging.info("Starting Google Sheets setup...")
         setup_google_sheets()
+        logging.info("Google Sheets setup completed.")
 
-        # Initialize the bot application
-        logging.info("Telegram bot setup starts here...")
+        logging.info("Initializing Telegram bot...")
         token = os.getenv("TELEGRAM_TOKEN")
-        global application
+        if not token:
+            logging.error("TELEGRAM_TOKEN is missing!")
+            raise ValueError("TELEGRAM_TOKEN is not set.")
+        
         application = Application.builder().token(token).build()
-
-        # Add your handlers
+        logging.info("Telegram bot initialized successfully.")
+        
+        # Add your handlers here
         application.add_handler(add_expense_handler)
         application.add_handler(query_expenses_handler)
         application.add_handler(CommandHandler("summary", summary))
         application.add_handler(table_expenses_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))
 
-        # Set the webhook URL
         await application.initialize()
-        # webhook_url = os.getenv("WEBHOOK_URL")  # Ensure you set this environment variable
-        # # await application.bot.set_webhook(webhook_url)
-
-        # # logging.info(f"Webhook set to {webhook_url}")
-
-        # Return the application instance for further processing
         return application
     except Exception as e:
-        logging.error(f"Failed to start the bot: {e}")
+        logging.error(f"Error initializing bot: {e}")
         raise
