@@ -5,6 +5,7 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, CallbackContext
 import gspread
 from google.oauth2.service_account import Credentials
+from cryptography.fernet import Fernet
 from datetime import datetime, timedelta
 
 # Set up logging
@@ -12,12 +13,60 @@ logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
+expenses = None
+analysis = None
+
+def decrypt_credentials():
+    try:
+        # Load the decryption key from the environment variable
+        key = os.getenv("DECRYPTION_KEY")
+        if not key:
+            raise ValueError("DECRYPTION_KEY environment variable is missing.")
+
+        # Initialize the Fernet decryption tool
+        fernet = Fernet(key.encode())
+
+        # Read the encrypted credentials file
+        with open("credentials.json.enc", "rb") as enc_file:
+            encrypted_data = enc_file.read()
+
+        # Decrypt the file
+        decrypted_data = fernet.decrypt(encrypted_data)
+
+        # Write the decrypted data to a temporary file
+        decrypted_path = "decrypted_credentials.json"
+        with open(decrypted_path, "wb") as dec_file:
+            dec_file.write(decrypted_data)
+
+        print(f"Decrypted credentials.json successfully: {decrypted_path}")
+        return decrypted_path
+    except Exception as e:
+        print(f"Error decrypting credentials.json: {e}")
+        raise
+
 # Google Sheets Setup
-scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
-client = gspread.authorize(creds)
-expenses = client.open('Expense Tracker').worksheet('expenses')
-analysis = client.open('Expense Tracker').worksheet('analysis')
+def setup_google_sheets():
+    try:
+        # Decrypt credentials and get the path to the decrypted file
+        decrypted_credentials_path = decrypt_credentials()
+
+        # Define the scope for Google Sheets
+        scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+        creds = Credentials.from_service_account_file(decrypted_credentials_path, scopes=scope)
+
+        # Authorize the client
+        client = gspread.authorize(creds)
+        
+        # Access the worksheets
+        expenses = client.open('Expense Tracker').worksheet('expenses')
+        analysis = client.open('Expense Tracker').worksheet('analysis')
+
+        logging.info("Google Sheets setup complete.")
+        return expenses, analysis
+    except Exception as e:
+        logging.error(f"Error setting up Google Sheets: {e}")
+        raise
+
 
 
 async def ensure_not_in_conversation(update: Update, context: CallbackContext):
@@ -526,6 +575,8 @@ table_expenses_handler = ConversationHandler(
 
 # Main bot setup
 def main():
+    expenses, analysis = setup_google_sheets()
+    logging.info("Telegram bot setup starts here...")
     token = os.getenv("TELEGRAM_TOKEN")
     application = Application.builder().token(token).build()
 
