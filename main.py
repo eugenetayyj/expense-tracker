@@ -278,6 +278,7 @@ async def get_filter_value(update: Update, context: CallbackContext):
     """Get the filter value."""
     filter_type = context.user_data["current_filter_type"]
     filter_value = update.message.text.strip()
+    final_filter_value = None  # Initialize final_filter_value
 
     if filter_type == "month":
         try:
@@ -288,13 +289,27 @@ async def get_filter_value(update: Update, context: CallbackContext):
                 "Invalid month format. Please use 'MMM YYYY' (e.g., Dec 2024)."
             )
             return FILTER_VALUE
+    elif filter_type == "category":
+        final_filter_value = filter_value  # Save the raw category as the filter
+    elif filter_type == "tags":
+        final_filter_value = filter_value.lower().strip()  # Normalize the tags
+    elif filter_type == "period":
+        # For period, we might need to handle start_date and end_date separately
+        final_filter_value = filter_value
+
+    # Check if final_filter_value is set
+    if final_filter_value is None:
+        await update.message.reply_text(
+            "Invalid filter value. Please try again."
+        )
+        return FILTER_VALUE
 
     # Save the filter
     context.user_data["filters"][filter_type] = final_filter_value
 
     # Ask if they want to add another filter
     await update.message.reply_text(
-        f"Filter '{filter_type}' set to '{filter_value}'.\n"
+        f"Filter '{filter_type}' set to '{final_filter_value}'.\n"
         "Do you want to add another filter?",
         reply_markup=CONFIRM_KEYBOARD,
     )

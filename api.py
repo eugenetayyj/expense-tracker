@@ -26,16 +26,13 @@ async def startup():
 async def webhook(request: Request, background_tasks: BackgroundTasks):
     """Handle incoming updates from Telegram."""
     try:
-        logging.info("Received a webhook request.")
         update_data = await request.json()
-        logging.info(f"Request JSON: {update_data}")
 
         if bot_app is None or bot_app.bot is None:
             logging.error("Bot is not initialized!")
             raise HTTPException(status_code=500, detail="Bot is not initialized!")
 
         update = Update.de_json(update_data, bot_app.bot)
-        logging.info(f"Parsed update: {update}")
 
         # Process the update asynchronously
         background_tasks.add_task(bot_app.process_update, update)
