@@ -83,7 +83,159 @@ CONFIRM_KEYBOARD = ReplyKeyboardMarkup(
 
 # Command: /add
 WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS = range(5)
-ADD_CATEGORY = range(1)
+TABLE_TYPE = range(1)
+CATEGORY_ACTION, SELECT_CATEGORY, NEW_CATEGORY_NAME = range(3)
+
+CATEGORY_MANAGEMENT_KEYBOARD = ReplyKeyboardMarkup(
+    [["➕ Add Category", "✏️ Edit  Category", "🗑️ Delete Category"]],
+    one_time_keyboard=True,
+    resize_keyboard=True,
+)
+async def start_handle_categories(update: Update, context: CallbackContext):
+    """Start the category management process."""
+    if not await ensure_not_in_conversation(update, context):
+        return ConversationHandler.END
+
+    context.user_data["in_conversation"] = True
+    await update.message.reply_text(
+        "What would you like to do with categories?",
+        reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+    )
+    return CATEGORY_ACTION
+
+async def handle_category_action(update: Update, context: CallbackContext):
+    """Handle the selected category action."""
+    action = update.message.text.strip()
+    
+    if action == "➕ Add Category":
+        await update.message.reply_text("Please enter the name of the new category:")
+        context.user_data["category_action"] = "add"
+        return NEW_CATEGORY_NAME
+    
+    elif action == "✏️ Edit Category" or action == "🗑️ Delete Category":
+        # Get all categories and create a keyboard
+        default_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
+        all_categories = default_categories + custom_categories
+        
+        # Create rows of 2 categories each for better display
+        category_rows = [all_categories[i:i+2] for i in range(0, len(all_categories), 2)]
+        
+        category_keyboard = ReplyKeyboardMarkup(
+            category_rows,
+            one_time_keyboard=True,
+            resize_keyboard=True,
+        )
+        
+        if action == "✏️ Edit Category":
+            await update.message.reply_text(
+                "Which category would you like to edit?",
+                reply_markup=category_keyboard,
+            )
+            context.user_data["category_action"] = "edit"
+        else:  # Delete Category
+            await update.message.reply_text(
+                "Which category would you like to delete?",
+                reply_markup=category_keyboard,
+            )
+            context.user_data["category_action"] = "delete"
+        
+        return SELECT_CATEGORY
+    
+    else:
+        await update.message.reply_text(
+            "Invalid option. Please select from the options below:",
+            reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+        )
+        return CATEGORY_ACTION
+
+async def handle_category_selection(update: Update, context: CallbackContext):
+    """Handle the selected category for edit or delete."""
+    selected_category = update.message.text.strip()
+    default_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
+    
+    # Store the selected category
+    context.user_data["selected_category"] = selected_category
+    
+    if context.user_data["category_action"] == "edit":
+        # For editing, ask for the new name
+        await update.message.reply_text(f"Enter the new name for '{selected_category}':")
+        return NEW_CATEGORY_NAME
+    
+    elif context.user_data["category_action"] == "delete":
+        # For deleting, check if it's a default category
+        if selected_category in default_categories:
+            await update.message.reply_text(
+                f"Cannot delete default category '{selected_category}'.",
+                reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            )
+            return CATEGORY_ACTION
+        
+        # Check if the category exists in custom categories
+        if selected_category not in custom_categories:
+            await update.message.reply_text(
+                f"Category '{selected_category}' not found in custom categories.",
+                reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            )
+            return CATEGORY_ACTION
+        
+        # Remove the category
+        custom_categories.remove(selected_category)
+        await update.message.reply_text(
+            f"Category '{selected_category}' has been deleted.",
+            reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+        )
+        
+        # Ask if they want to do something else with categories
+        return CATEGORY_ACTION
+
+async def handle_new_category_name(update: Update, context: CallbackContext):
+    """Handle the new category name for add or edit."""
+    new_name = update.message.text.strip().capitalize()
+    default_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
+    all_categories = default_categories + custom_categories
+    
+    if context.user_data["category_action"] == "add":
+        # Check if category already exists
+        if new_name in all_categories:
+            await update.message.reply_text(
+                f"Category '{new_name}' already exists!",
+                reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            )
+        else:
+            custom_categories.append(new_name)
+            await update.message.reply_text(
+                f"Category '{new_name}' added successfully!",
+                reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            )
+    
+    elif context.user_data["category_action"] == "edit":
+        selected_category = context.user_data["selected_category"]
+        
+        # Check if new name already exists
+        if new_name in all_categories and new_name != selected_category:
+            await update.message.reply_text(
+                f"Cannot rename to '{new_name}' as it already exists!",
+                reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            )
+        else:
+            # If it's a default category, add the new name to custom categories
+            if selected_category in default_categories:
+                custom_categories.append(new_name)
+                await update.message.reply_text(
+                    f"Added '{new_name}' as a custom category. Default categories cannot be modified.",
+                    reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+                )
+            else:
+                # Replace the category in custom_categories
+                index = custom_categories.index(selected_category)
+                custom_categories[index] = new_name
+                await update.message.reply_text(
+                    f"Category renamed from '{selected_category}' to '{new_name}'.",
+                    reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+                )
+    
+    # Ask if they want to do something else with categories
+    return CATEGORY_ACTION
 
 async def start_add(update: Update, context: CallbackContext):
     """Initiate the add expense process."""
@@ -620,12 +772,14 @@ table_expenses_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", global_cancel)],
 )
 
-add_category_handler = ConversationHandler(
-        entry_points=[CommandHandler("addcategory", start_add_category)],
-        states={
-            ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_category)]
-        },
-        fallbacks=[CommandHandler("cancel", global_cancel)]
+handle_categories_handler = ConversationHandler(
+    entry_points=[CommandHandler("handlecategories", start_handle_categories)],
+    states={
+        CATEGORY_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category_action)],
+        SELECT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category_selection)],
+        NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_category_name)],
+    },
+    fallbacks=[CommandHandler("cancel", global_cancel)],
 )
 
 
@@ -654,7 +808,7 @@ async def start_bot():
         application.add_handler(CommandHandler("summary", summary))
         application.add_handler(table_expenses_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))
-        application.add_handler(add_category_handler)
+        application.add_handler(handle_categories_handler)
 
         await application.initialize()
         return application
