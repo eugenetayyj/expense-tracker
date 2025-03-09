@@ -182,11 +182,12 @@ async def handle_category_selection(update: Update, context: CallbackContext):
         custom_categories.remove(selected_category)
         await update.message.reply_text(
             f"Category '{selected_category}' has been deleted.",
-            reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
+            reply_markup=ReplyKeyboardMarkup([["Done"]], one_time_keyboard=True, resize_keyboard=True),
         )
         
-        # Ask if they want to do something else with categories
-        return CATEGORY_ACTION
+        # End the conversation after deletion
+        context.user_data["in_conversation"] = False
+        return ConversationHandler.END
 
 async def handle_new_category_name(update: Update, context: CallbackContext):
     """Handle the new category name for add or edit."""
@@ -576,7 +577,11 @@ async def add_another_filter(update: Update, context: CallbackContext):
 
 async def global_cancel(update: Update, context: CallbackContext):
     """Cancel any active conversation and reset the bot state."""
-    context.user_data.clear()
+    # Clear all user data
+    if "in_conversation" in context.user_data:
+        context.user_data.clear()
+    
+    # Explicitly set in_conversation to False
     context.user_data["in_conversation"] = False
 
     await update.message.reply_text("Current task canceled. You can now start a new command.")
