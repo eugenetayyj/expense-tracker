@@ -13,6 +13,8 @@ logging.basicConfig(level=logging.INFO)
 
 load_dotenv()
 
+custom_categories = []
+
 def decrypt_credentials():
     try:
         # Load the decryption key from the environment variable
@@ -64,39 +66,7 @@ def setup_google_sheets():
         logging.error(f"Error setting up Google Sheets: {e}")
         raise
 
-ADD_CATEGORY = range(1)
 
-async def start_add_category(update: Update, context: CallbackContext):
-    """Initiate add category process"""
-    if not await ensure_not_in_conversation(update, context):
-        return ConversationHandler.END
-
-    context.user_data["in_conversation"] = True
-    await update.message.reply_text("Enter the name of the new category:")
-    return ADD_CATEGORY
-
-async def save_new_category(update: Update, context: CallbackContext):
-    """Save the new category to Google Sheets"""
-    try:
-        new_category = update.message.text.strip().lower()
-        
-        # Check if category already exists
-        existing_categories = [row[0].lower() for row in categories_ws.get_all_values()]
-        if new_category in existing_categories:
-            await update.message.reply_text("⚠️ This category already exists!")
-            context.user_data["in_conversation"] = False
-            return ConversationHandler.END
-            
-        # Add new category to the sheet
-        categories_ws.append_row([new_category])
-        await update.message.reply_text(f"✅ New category '{new_category}' added successfully!")
-        
-    except Exception as e:
-        logging.error(f"Error adding category: {e}")
-        await update.message.reply_text("❌ Failed to add category. Please try again later.")
-    
-    context.user_data["in_conversation"] = False
-    return ConversationHandler.END
 
 async def ensure_not_in_conversation(update: Update, context: CallbackContext):
     """Check if a conversation is already active."""
@@ -113,6 +83,7 @@ CONFIRM_KEYBOARD = ReplyKeyboardMarkup(
 
 # Command: /add
 WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS = range(5)
+ADD_CATEGORY = range(1)
 
 async def start_add(update: Update, context: CallbackContext):
     """Initiate the add expense process."""
@@ -123,6 +94,31 @@ async def start_add(update: Update, context: CallbackContext):
     reply_keyboard=[["Today", "Yesterday"]]
     await update.message.reply_text("When did you spend this? (Select from the options or type in YYYY-MM-DD)", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True))
     return WHEN
+
+async def start_add_category(update: Update, context: CallbackContext):
+    """Initiate add category process"""
+    if not await ensure_not_in_conversation(update, context):
+        return ConversationHandler.END
+
+    context.user_data["in_conversation"] = True
+    await update.message.reply_text("Please enter the name of the new category:")
+    return ADD_CATEGORY
+
+async def save_new_category(update: Update, context: CallbackContext):
+    """Save the new category"""
+    new_category = update.message.text.strip().capitalize()
+    
+    # Check if category already exists
+    existing_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"] + custom_categories
+    
+    if new_category in existing_categories:
+        await update.message.reply_text(f"Category '{new_category}' already exists!")
+    else:
+        custom_categories.append(new_category)
+        await update.message.reply_text(f"Category '{new_category}' added successfully!")
+    
+    context.user_data["in_conversation"] = False
+    return ConversationHandler.END
 
 async def get_when(update: Update, context: CallbackContext):
     """Handle the 'when' question."""
@@ -142,31 +138,12 @@ async def get_when(update: Update, context: CallbackContext):
     context.user_data["date"] = date
 
     # Send category selection keyboard
-    CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
-        [["Food", "Travel", "Shopping"], ["Entertainment", "Utilities", "Other"]],
-        one_time_keyboard=True,
-        resize_keyboard=True,
-    )
-    await update.message.reply_text(
-        "What category of expense is this? (Choose from below):",
-        reply_markup=CATEGORY_KEYBOARD,
-    )
-    return CATEGORY
-
-async def get_category(update: Update, context: CallbackContext):
-    """Handle the 'category' question with dynamic categories"""
-    try:
-        # Get all categories from the sheet
-        categories = [row[0] for row in categories_ws.get_all_values() if row[0].strip()]
-        # Add default categories if sheet is empty
-        if not categories:
-            categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
-    except Exception as e:
-        logging.error(f"Error loading categories: {e}")
-        categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
-
-    # Create dynamic keyboard
-    category_rows = [categories[i:i+3] for i in range(0, len(categories), 3)]
+    default_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]
+    all_categories = default_categories + custom_categories
+    
+    # Create rows of 3 categories each
+    category_rows = [all_categories[i:i+3] for i in range(0, len(all_categories), 3)]
+    
     CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
         category_rows,
         one_time_keyboard=True,
@@ -177,6 +154,12 @@ async def get_category(update: Update, context: CallbackContext):
         "What category of expense is this? (Choose from below):",
         reply_markup=CATEGORY_KEYBOARD,
     )
+    return CATEGORY
+
+async def get_category(update: Update, context: CallbackContext):
+    """Handle the 'category' question."""
+    context.user_data["category"] = update.message.text.strip().lower()
+    await update.message.reply_text("What did you spend on? (e.g., Lunch, Train ticket, etc.)")
     return DESCRIPTION
 
 async def get_description(update: Update, context: CallbackContext):
@@ -228,6 +211,7 @@ async def get_tags(update: Update, context: CallbackContext):
 
     context.user_data["in_conversation"] = False
     return ConversationHandler.END
+
 
 # Command: /query
 CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
@@ -636,6 +620,14 @@ table_expenses_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", global_cancel)],
 )
 
+add_category_handler = ConversationHandler(
+        entry_points=[CommandHandler("addcategory", start_add_category)],
+        states={
+            ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_category)]
+        },
+        fallbacks=[CommandHandler("cancel", global_cancel)]
+)
+
 
 # Main bot setup
 async def start_bot():
@@ -662,13 +654,7 @@ async def start_bot():
         application.add_handler(CommandHandler("summary", summary))
         application.add_handler(table_expenses_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))
-        application.add_handler(ConversationHandler(
-        entry_points=[CommandHandler("addcategory", start_add_category)],
-        states={
-            ADD_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_new_category)]
-        },
-        fallbacks=[CommandHandler("cancel", global_cancel)]
-    ))
+        application.add_handler(add_category_handler)
 
         await application.initialize()
         return application
