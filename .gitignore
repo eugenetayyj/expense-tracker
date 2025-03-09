@@ -7,3 +7,4 @@ decrypted_credentials.json
 __pycache__/
 *.pyc
 *.log
+venv/
