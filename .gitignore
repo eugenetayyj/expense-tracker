@@ -1,9 +1,10 @@
 # Ignore credentials.json and .env
-credentials.json
 .env
 decrypted_credentials.json
+
 
 # Other common files to ignore
 __pycache__/
 *.pyc
 *.log
+venv/
