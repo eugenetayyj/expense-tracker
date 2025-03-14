@@ -6,6 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, Conversati
 import gspread
 from google.oauth2.service_account import Credentials
 from datetime import datetime, timedelta
+import json
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -22,9 +23,25 @@ def setup_google_sheets():
             'https://www.googleapis.com/auth/drive',
             'https://www.googleapis.com/auth/spreadsheets'  # Add this for write access
         ]
+        with open('credentials.json', 'r') as f:
+            credentials_data = json.loads(f.read())
+        
+        # Get private key and private key ID from environment variables
+        private_key = os.getenv("CREDENTIALS_PRIVATE_KEY")
+        private_key_id = os.getenv("CREDENTIALS_PRIVATE_ID")
+        
+        if not private_key or not private_key_id:
+            raise ValueError("PRIVATE_KEY or PRIVATE_KEY_ID environment variables are missing")
+        
+        # Replace newlines in private key if they were escaped in the env var
+        private_key = private_key.replace("\\n", "\n")
+        
+        # Add the private key and private key ID to the credentials
+        credentials_data["private_key"] = private_key
+        credentials_data["private_key_id"] = private_key_id
         
         # Create credentials directly from the credentials.json file
-        creds = Credentials.from_service_account_file('credentials.json', scopes=scope)
+        creds = Credentials.from_service_account_info(credentials_data, scopes=scope)
 
         # Authorize the client
         client = gspread.authorize(creds)
@@ -39,8 +56,6 @@ def setup_google_sheets():
     except Exception as e:
         logging.error(f"Error setting up Google Sheets: {e}")
         raise
-
-
 
 async def ensure_not_in_conversation(update: Update, context: CallbackContext):
     """Check if a conversation is already active."""
@@ -873,77 +888,78 @@ async def handle_category_selection(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 # Main bot setup
-# async def start_bot():
-#     """
-#     Initialize and start the Telegram bot.
-#     """
-#     try:
-#         logging.info("Starting Google Sheets setup...")
-#         setup_google_sheets()
-#         logging.info("Google Sheets setup completed.")
-
-#         logging.info("Initializing Telegram bot...")
-#         token = os.getenv("TELEGRAM_TOKEN")
-#         if not token:
-#             logging.error("TELEGRAM_TOKEN is missing!")
-#             raise ValueError("TELEGRAM_TOKEN is not set.")
-        
-#         application = Application.builder().token(token).build()
-#         logging.info("Telegram bot initialized successfully.")
-        
-#         # Add your handlers here
-#         application.add_handler(add_expense_handler)
-#         application.add_handler(query_expenses_handler)
-#         application.add_handler(handle_categories_handler)
-#         application.add_handler(CommandHandler("summary", summary))
-#         application.add_handler(table_expenses_handler)
-#         application.add_handler(CommandHandler("cancel", global_cancel))
-
-#         await application.initialize()
-#         return application
-#     except Exception as e:
-#         logging.error(f"Error initializing bot: {e}")
-#         raise
-
-# polling
-def main():
-    """Start the bot in polling mode."""
+async def start_bot():
+    """
+    Initialize and start the Telegram bot.
+    """
     try:
-        # Initialize Google Sheets
         logging.info("Starting Google Sheets setup...")
         setup_google_sheets()
         logging.info("Google Sheets setup completed.")
 
-        # Get token
+        logging.info("Initializing Telegram bot...")
         token = os.getenv("TELEGRAM_TOKEN")
         if not token:
             logging.error("TELEGRAM_TOKEN is missing!")
             raise ValueError("TELEGRAM_TOKEN is not set.")
         
-        # Build application with polling
-        application = (
-            Application.builder()
-            .token(token)
-            .build()
-        )
+        application = Application.builder().token(token).build()
+        logging.info("Telegram bot initialized successfully.")
         
-        # Add handlers
+        # Add your handlers here
         application.add_handler(add_expense_handler)
         application.add_handler(query_expenses_handler)
         application.add_handler(handle_categories_handler)
         application.add_handler(CommandHandler("summary", summary))
         application.add_handler(table_expenses_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))
-        
-        # Start the bot in polling mode
-        logging.info("Starting bot in polling mode...")
-        application.run_polling()
-        
-        logging.info("Bot is running. Press Ctrl+C to stop.")
 
+        await application.initialize()
+        return application
     except Exception as e:
         logging.error(f"Error initializing bot: {e}")
         raise
 
-if __name__ == "__main__":
-    main()
+# polling
+# def main():
+#     """Start the bot in polling mode."""
+#     try:
+#         # Initialize Google Sheets
+#         logging.info("Starting Google Sheets setup...")
+#         setup_google_sheets()
+#         logging.info("Google Sheets setup completed.")
+
+#         # Get token
+#         token = os.getenv("TELEGRAM_TOKEN")
+#         if not token:
+#             logging.error("TELEGRAM_TOKEN is missing!")
+#             raise ValueError("TELEGRAM_TOKEN is not set.")
+        
+#         # Build application with polling
+#         application = (
+#             Application.builder()
+#             .token(token)
+#             .build()
+#         )
+#         logging.info("Telegram bot initialized successfully.")
+        
+#         # Add handlers
+#         application.add_handler(add_expense_handler)
+#         application.add_handler(query_expenses_handler)
+#         application.add_handler(handle_categories_handler)
+#         application.add_handler(CommandHandler("summary", summary))
+#         application.add_handler(table_expenses_handler)
+#         application.add_handler(CommandHandler("cancel", global_cancel))
+        
+#         # Start the bot in polling mode
+#         logging.info("Starting bot in polling mode...")
+#         application.run_polling()
+        
+#         logging.info("Bot is running. Press Ctrl+C to stop.")
+
+#     except Exception as e:
+#         logging.error(f"Error initializing bot: {e}")
+#         raise
+
+# if __name__ == "__main__":
+#     main()

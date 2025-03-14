@@ -1,8 +1,6 @@
 # Ignore credentials.json and .env
-credentials.json
 .env
 decrypted_credentials.json
-credentials.json
 
 
 # Other common files to ignore
