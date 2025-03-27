@@ -28,7 +28,6 @@ load_dotenv()
 
 def setup_google_sheets():
     try:
-        # Define the scope for Google Sheets
         scope = [
             'https://spreadsheets.google.com/feeds', 
             'https://www.googleapis.com/auth/drive',
@@ -37,51 +36,105 @@ def setup_google_sheets():
         with open('credentials.json', 'r') as f:
             credentials_data = json.loads(f.read())
         
-        # Get private key and private key ID from environment variables
         private_key = os.getenv("CREDENTIALS_PRIVATE_KEY")
         private_key_id = os.getenv("CREDENTIALS_PRIVATE_ID")
         
         if not private_key or not private_key_id:
             raise ValueError("PRIVATE_KEY or PRIVATE_KEY_ID environment variables are missing")
         
-        # Replace newlines in private key if they were escaped in the env var
         private_key = private_key.replace("\\n", "\n")
         
-        # Add the private key and private key ID to the credentials
         credentials_data["private_key"] = private_key
         credentials_data["private_key_id"] = private_key_id
         
-        # Create credentials directly from the credentials.json file
         creds = Credentials.from_service_account_info(credentials_data, scopes=scope)
 
         # Authorize the client
-        # global analysis, categories, client
         client = gspread.authorize(creds)
         
         sheet_manager = SheetManager(client)
         analysis_manager = AnalysisManager(client)
         logging.info("Google Sheets setup complete.")
-        # return sheet_manager, analysis, client
         return sheet_manager, analysis_manager
-        # default_sheet = categories.col_values(3)[1]
-        # curr_sheet = client.open('Expense Tracker').worksheet(default_sheet)
-
-        # return curr_sheet, analysis, categories, client
     except Exception as e:
         logging.error(f"Error setting up Google Sheets: {e}")
         raise
 
 async def global_cancel(update: Update, context: CallbackContext):
     """Cancel any active conversation and reset the bot state."""
-    # Clear all user data
     if "in_conversation" in context.user_data:
         context.user_data.clear()
     
-    # Explicitly set in_conversation to False
     context.user_data["in_conversation"] = False
 
     await update.message.reply_text("Current task canceled. You can now start a new command.")
     return ConversationHandler.END
+
+def setup_handlers(sheet_manager, analysis_manager):
+    
+    sheet_handler = SheetHandler(sheet_manager)
+    expense_handler = ExpenseHandler(sheet_manager)
+    category_handler = CategoryHandler(sheet_manager)
+    summary_handler = SummaryHandler(analysis_manager)
+    table_handler = TableHandler(analysis_manager)
+    query_handler = QueryHandler(sheet_manager)
+    
+    sheet_convo_handler = ConversationHandler(
+        entry_points=[CommandHandler("handlesheets", sheet_handler.start_curr_sheet)],
+        states={
+            SHEET_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_action)],
+            NEW_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_new_sheet)],
+            CHANGE_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_change)],
+            PICK_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_pick_sheet)],
+        },
+        fallbacks=[CommandHandler("cancel", global_cancel)],
+    )
+    
+    categories_convo_handler = ConversationHandler(
+        entry_points=[CommandHandler("handlecategories", category_handler.start_handle_categories)],
+        states={
+            CATEGORY_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_action)],
+            SELECT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_selection)],
+            NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_new_category_name)],
+        },
+        fallbacks=[CommandHandler("cancel", global_cancel)],
+    )
+    
+    expense_convo_handler = ConversationHandler(
+        entry_points=[CommandHandler("add", expense_handler.start_add)],
+        states={
+            WHEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_when)],
+            CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_category)],
+            DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_description)],
+            AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_amount)],
+            TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_tags)],
+        },
+        fallbacks=[CommandHandler("cancel", global_cancel)],
+    )
+
+    summary_command_handler = CommandHandler("summary", summary_handler.summary)
+    
+    table_convo_handler = ConversationHandler(
+        entry_points=[CommandHandler("table", table_handler.start_table)],
+        states={
+            TABLE_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, table_handler.get_table_type)],
+        },
+        fallbacks=[CommandHandler("cancel", global_cancel)],
+    )
+    
+    query_convo_handler = ConversationHandler(
+        entry_points=[CommandHandler("query", query_handler.start_query)],
+        states={
+                FILTER_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_filter_type)],
+                START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_start_date)],
+                END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_end_date)],
+                FILTER_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_filter_value)],
+                ADD_ANOTHER_FILTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.add_another_filter)],
+            },
+            fallbacks=[CommandHandler("cancel", global_cancel)],
+    )
+
+    return sheet_convo_handler, categories_convo_handler, expense_convo_handler, summary_command_handler, table_convo_handler, query_convo_handler
 
 # Main bot setup
 async def start_web_bot():
@@ -102,70 +155,9 @@ async def start_web_bot():
         application = Application.builder().token(token).build()
         logging.info("Telegram bot initialized successfully.")
         
-        sheet_handler = SheetHandler(sheet_manager)
-        expense_handler = ExpenseHandler(sheet_manager)
-        category_handler = CategoryHandler(sheet_manager)
-        summary_handler = SummaryHandler(analysis_manager)
-        table_handler = TableHandler(analysis_manager)
-        query_handler = QueryHandler(sheet_manager)
+        sheet_convo_handler, categories_convo_handler, expense_convo_handler, summary_command_handler, table_convo_handler, query_convo_handler = setup_handlers(sheet_manager, analysis_manager)
         
-        sheet_convo_handler = ConversationHandler(
-            entry_points=[CommandHandler("handlesheets", sheet_handler.start_curr_sheet)],
-            states={
-                SHEET_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_action)],
-                NEW_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_new_sheet)],
-                CHANGE_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_change)],
-                PICK_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_pick_sheet)],
-            },
-            fallbacks=[CommandHandler("cancel", global_cancel)],
-        )
         
-        categories_convo_handler = ConversationHandler(
-            entry_points=[CommandHandler("handlecategories", category_handler.start_handle_categories)],
-            states={
-                CATEGORY_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_action)],
-                SELECT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_selection)],
-                NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_new_category_name)],
-            },
-            fallbacks=[CommandHandler("cancel", global_cancel)],
-        )
-        
-        expense_convo_handler = ConversationHandler(
-            entry_points=[CommandHandler("add", expense_handler.start_add)],
-            states={
-                WHEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_when)],
-                CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_category)],
-                DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_description)],
-                AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_amount)],
-                TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_tags)],
-            },
-            fallbacks=[CommandHandler("cancel", global_cancel)],
-        )
-
-        summary_command_handler = CommandHandler("summary", summary_handler.summary)
-        
-        table_convo_handler = ConversationHandler(
-            entry_points=[CommandHandler("table", table_handler.start_table)],
-            states={
-                TABLE_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, table_handler.get_table_type)],
-            },
-            fallbacks=[CommandHandler("cancel", global_cancel)],
-        )
-        
-        query_convo_handler = ConversationHandler(
-            entry_points=[CommandHandler("query", query_handler.start_query)],
-            states={
-                    FILTER_TYPE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_filter_type)],
-                    START_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_start_date)],
-                    END_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_end_date)],
-                    FILTER_VALUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.get_filter_value)],
-                    ADD_ANOTHER_FILTER: [MessageHandler(filters.TEXT & ~filters.COMMAND, query_handler.add_another_filter)],
-                },
-                fallbacks=[CommandHandler("cancel", global_cancel)],
-        )
-
-        
-        # Add your handlers here
         application.add_handler(expense_convo_handler)
         application.add_handler(sheet_convo_handler)
         application.add_handler(summary_command_handler)
@@ -186,7 +178,7 @@ def start_poll_bot():
     try:
         # Initialize Google Sheets
         logging.info("Starting Google Sheets setup...")
-        setup_google_sheets()
+        sheet_manager, analysis_manager = setup_google_sheets()
         logging.info("Google Sheets setup completed.")
 
         # Get token
@@ -203,13 +195,15 @@ def start_poll_bot():
         )
         logging.info("Telegram bot initialized successfully.")
         
-        # Add handlers
-        application.add_handler(add_expense_handler)
-        application.add_handler(curr_sheet_handler)
-        application.add_handler(query_expenses_handler)
-        application.add_handler(handle_categories_handler)
-        application.add_handler(CommandHandler("summary", summary))
-        application.add_handler(table_expenses_handler)
+        sheet_convo_handler, categories_convo_handler, expense_convo_handler, summary_command_handler, table_convo_handler, query_convo_handler = setup_handlers(sheet_manager, analysis_manager)
+        
+        
+        application.add_handler(expense_convo_handler)
+        application.add_handler(sheet_convo_handler)
+        application.add_handler(summary_command_handler)
+        application.add_handler(categories_convo_handler)
+        application.add_handler(table_convo_handler)
+        application.add_handler(query_convo_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))
         
         # Start the bot in polling mode
