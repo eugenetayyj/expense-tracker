@@ -5,14 +5,15 @@ from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, CallbackContext
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
-from handlers.sheet_handlers import (
-    SHEET_ACTION, NEW_SHEET, CHANGE_SHEET, PICK_SHEET, SheetHandlers
-    # start_curr_sheet, handle_sheet_action, handle_new_sheet,
-    # handle_sheet_change, handle_pick_sheet
+from handlers.sheet_handler import (
+    SHEET_ACTION, NEW_SHEET, CHANGE_SHEET, PICK_SHEET, SheetHandler
 )
-from handlers.utils import ensure_not_in_conversation
+from handlers.category_handler import (CATEGORY_ACTION, SELECT_CATEGORY, NEW_CATEGORY_NAME, CategoryHandler)
+from handlers.expense_handler import (WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS, ExpenseHandler)
+from handlers.utils import ensure_not_in_conversation, CONFIRM_KEYBOARD, get_all_categories
+from handlers.sheet_manager import SheetManager
 
 
 # Set up logging
@@ -50,16 +51,19 @@ def setup_google_sheets():
         creds = Credentials.from_service_account_info(credentials_data, scopes=scope)
 
         # Authorize the client
-        global curr_sheet, analysis, categories, client
+        global analysis, categories, client
         client = gspread.authorize(creds)
         # Access the worksheets
         categories = client.open('Expense Tracker').worksheet('settings')
-        default_sheet = categories.col_values(3)[1]
-        curr_sheet = client.open('Expense Tracker').worksheet(default_sheet)
         analysis = client.open('Expense Tracker').worksheet('analysis')
-
+        sheet_manager = SheetManager(client, categories)
+        
         logging.info("Google Sheets setup complete.")
-        return curr_sheet, analysis, categories, client
+        return sheet_manager, analysis, client
+        # default_sheet = categories.col_values(3)[1]
+        # curr_sheet = client.open('Expense Tracker').worksheet(default_sheet)
+
+        # return curr_sheet, analysis, categories, client
     except Exception as e:
         logging.error(f"Error setting up Google Sheets: {e}")
         raise
@@ -71,361 +75,140 @@ def setup_google_sheets():
 #         return False
 #     return True
 
-CONFIRM_KEYBOARD = ReplyKeyboardMarkup(
-    [["✅ Yes", "❌ No"]],
-    one_time_keyboard=True,
-    resize_keyboard=True,
-)
-
-# Command: /add
-WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS = range(5)
-TABLE_TYPE = range(1)
-CATEGORY_ACTION, SELECT_CATEGORY, NEW_CATEGORY_NAME = range(3)
-
-CATEGORY_MANAGEMENT_KEYBOARD = ReplyKeyboardMarkup(
-    [["➕ Add Category", "✏️ Edit  Category", "🗑️ Delete Category"]],
-    one_time_keyboard=True,
-    resize_keyboard=True,
-)
-async def start_handle_categories(update: Update, context: CallbackContext):
-    """Start the category management process."""
-    if not await ensure_not_in_conversation(update, context):
-        return ConversationHandler.END
-
-    context.user_data["in_conversation"] = True
-    await update.message.reply_text(
-        "What would you like to do with categories?",
-        reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
-    )
-    return CATEGORY_ACTION
-
-async def handle_category_action(update: Update, context: CallbackContext):
-    """Handle the selected category action."""
-    action = update.message.text.strip()
-    
-    if action == "➕ Add Category":
-        await update.message.reply_text("Please enter the name of the new category:")
-        context.user_data["category_action"] = "add"
-        return NEW_CATEGORY_NAME
-    
-    elif action == "✏️ Edit Category" or action == "✏️ Edit  Category" or action == "🗑️ Delete Category":
-        # Get all categories from Google Sheets
-        all_categories = get_all_categories()
-        
-        # Create rows of 2 categories each for better display
-        category_rows = [all_categories[i:i+2] for i in range(0, len(all_categories), 2)]
-        
-        category_keyboard = ReplyKeyboardMarkup(
-            category_rows,
-            one_time_keyboard=True,
-            resize_keyboard=True,
-        )
-        
-        if action == "✏️ Edit Category" or action == "✏️ Edit  Category":
-            await update.message.reply_text(
-                "Which category would you like to edit?",
-                reply_markup=category_keyboard,
-            )
-            context.user_data["category_action"] = "edit"
-        else:  # Delete Category
-            await update.message.reply_text(
-                "Which category would you like to delete?",
-                reply_markup=category_keyboard,
-            )
-            context.user_data["category_action"] = "delete"
-        
-        return SELECT_CATEGORY
-    
-    else:
-        await update.message.reply_text(
-            "Invalid option. Please select from the options below:",
-            reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
-        )
-        return CATEGORY_ACTION
-
-async def handle_category_selection(update: Update, context: CallbackContext):
-    """Handle the selected category for edit or delete."""
-    selected_category = update.message.text.strip()
-    
-    # Store the selected category
-    context.user_data["selected_category"] = selected_category
-    
-    if context.user_data["category_action"] == "edit":
-        # For editing, ask for the new name
-        await update.message.reply_text(f"Enter the new name for '{selected_category}':")
-        return NEW_CATEGORY_NAME
-    
-    elif context.user_data["category_action"] == "delete":
-        # Delete the category using the Google Sheets function
-        success, message = delete_category(selected_category)
-        await update.message.reply_text(message)
-        
-        # End the conversation after deletion
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-
-async def handle_new_category_name(update: Update, context: CallbackContext):
-    """Handle the new category name for add or edit."""
-    new_name = update.message.text.strip().capitalize()
-    
-    if context.user_data["category_action"] == "add":
-        # Add the category using the Google Sheets function
-        success, message = add_category(new_name)
-        await update.message.reply_text(message)
-        
-        # End the conversation
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-    
-    elif context.user_data["category_action"] == "edit":
-        selected_category = context.user_data["selected_category"]
-        
-        # Update the category using the Google Sheets function
-        success, message = update_category(selected_category, new_name)
-        await update.message.reply_text(message)
-        
-        # End the conversation
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-    
-    # If we get here, something went wrong, so end the conversation
-    context.user_data.clear()  # Clear all user data
-    context.user_data["in_conversation"] = False
-    return ConversationHandler.END
-
-
-# SHEET_MANAGEMENT_KEYBOARD = ReplyKeyboardMarkup(
-#     [["Create", "Switch"]],
+# CONFIRM_KEYBOARD = ReplyKeyboardMarkup(
+#     [["✅ Yes", "❌ No"]],
 #     one_time_keyboard=True,
 #     resize_keyboard=True,
 # )
 
-# SHEET_ACTION, NEW_SHEET, CHANGE_SHEET, PICK_SHEET = range(4)
+# Command: /add
+# WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS = range(5)
 
-# async def start_curr_sheet(update: Update, context: CallbackContext):
+# async def start_add(update: Update, context: CallbackContext):
+#     """Initiate the add expense process."""
 #     if not await ensure_not_in_conversation(update, context):
 #         return ConversationHandler.END
 
 #     context.user_data["in_conversation"] = True
-#     await update.message.reply_text(
-#         "What would you like to do with sheets?",
-#         reply_markup=SHEET_MANAGEMENT_KEYBOARD,
-#     )
-#     return SHEET_ACTION
+#     reply_keyboard=[["Today", "Yesterday"]]
+#     await update.message.reply_text("When did you spend this? (Select from the options or type in YYYY-MM-DD)", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True))
+#     return WHEN
 
-# async def handle_sheet_action(update: Update, context: CallbackContext):
-#     """Handle the selected category action."""
-#     action = update.message.text.strip()
+# async def start_add_category(update: Update, context: CallbackContext):
+#     """Initiate add category process"""
+#     if not await ensure_not_in_conversation(update, context):
+#         return ConversationHandler.END
+
+#     context.user_data["in_conversation"] = True
+#     await update.message.reply_text("Please enter the name of the new category:")
+#     return CATEGORY
+
+# async def save_new_category(update: Update, context: CallbackContext):
+#     """Save the new category"""
+#     new_category = update.message.text.strip().capitalize()
     
-#     if action == "Create":
-#         await update.message.reply_text("Please enter the name of the new sheet:")
-#         # context.user_data["sheet_action"] = "add"
-#         return NEW_SHEET
-#     elif action == "Switch":
-#         # await update.message.reply_text("Which sheet do you want to access?")
-#         # context.user_data["sheet_action"] = "switch"
-#         return await handle_sheet_change(update, context)
-            
-# async def handle_sheet_change(update: Update, context: CallbackContext):
-#     """Handle sheet change"""
-#     all_sheets = [sheet for sheet in get_all_sheets() if sheet not in ["analysis", "settings"]]
-#     sheet_rows = [all_sheets[i:i+3] for i in range(0, len(all_sheets), 3)]
-#     SHEET_KEYBOARD = ReplyKeyboardMarkup(
-#         sheet_rows,
+#     # Check if category already exists
+#     existing_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"] + custom_categories
+    
+#     if new_category in existing_categories:
+#         await update.message.reply_text(f"Category '{new_category}' already exists!")
+#     else:
+#         custom_categories.append(new_category)
+#         await update.message.reply_text(f"Category '{new_category}' added successfully!")
+    
+#     context.user_data["in_conversation"] = False
+#     return ConversationHandler.END
+
+# async def get_when(update: Update, context: CallbackContext):
+#     """Handle the 'when' question."""
+#     user_input = update.message.text.strip().lower()
+
+#     if user_input == "today":
+#         date = datetime.now().strftime("%Y-%m-%d")
+#     elif user_input == "yesterday":
+#         date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+#     else:
+#         try:
+#             date = datetime.strptime(user_input, "%Y-%m-%d").strftime("%Y-%m-%d")
+#         except ValueError:
+#             await update.message.reply_text("Invalid date format. Please use YYYY-MM-DD, 'today', or 'yesterday'.")
+#             return WHEN
+
+#     context.user_data["date"] = date
+
+#     # Send category selection keyboard with categories from Google Sheets
+#     all_categories = get_all_categories()
+    
+#     # Create rows of 3 categories each
+#     category_rows = [all_categories[i:i+3] for i in range(0, len(all_categories), 3)]
+    
+#     CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
+#         category_rows,
 #         one_time_keyboard=True,
 #         resize_keyboard=True,
 #     )
+    
 #     await update.message.reply_text(
-#         "Which sheet do you want to access?",
-#         reply_markup=SHEET_KEYBOARD,
+#         "What category of expense is this? (Choose from below):",
+#         reply_markup=CATEGORY_KEYBOARD,
 #     )
-#     return PICK_SHEET
+#     return CATEGORY
 
-# async def handle_pick_sheet(update: Update, context: CallbackContext):
-#     """Handle the selected sheet."""
+# async def get_category(update: Update, context: CallbackContext):
+#     """Handle the 'category' question."""
+#     context.user_data["category"] = update.message.text.strip().lower()
+#     await update.message.reply_text("What did you spend on? (e.g., Lunch, Train ticket, etc.)")
+#     return DESCRIPTION
+
+# async def get_description(update: Update, context: CallbackContext):
+#     """Handle the 'description' question."""
+#     context.user_data["description"] = update.message.text.strip()
+#     await update.message.reply_text("How much did you spend? (e.g., $12.50)")
+#     return AMOUNT
+
+# async def get_amount(update: Update, context: CallbackContext):
+#     """Handle the 'amount' question."""
 #     try:
-#         context.user_data["selected_sheet"] = update.message.text
-#         global curr_sheet
-#         curr_sheet = client.open('Expense Tracker').worksheet(context.user_data["selected_sheet"])
-#         categories.update_cell(2, 3, context.user_data["selected_sheet"])
-#         await update.message.reply_text(f"Switched to {context.user_data['selected_sheet']}")
-#     except Exception as e:
-#         logging.error(f"Error getting sheets: {e}")
-#         await update.message.reply_text("Failed to swap sheets. Please try again later.")
-#     context.user_data["in_conversation"] = False
-#     return ConversationHandler.END
+#         context.user_data["amount"] = float(update.message.text.strip())
+#     except ValueError:
+#         await update.message.reply_text("Invalid amount. Please enter a numeric value (e.g., 12.50).")
+#         return AMOUNT
 
-# def get_all_sheets():
+#     await update.message.reply_text("Any tags you would like to add? (Separate by commas or type 'none')")
+#     return TAGS
+
+# async def get_tags(update: Update, context: CallbackContext):
+#     """Handle the 'tags' question."""
+#     tags = update.message.text.strip()
+#     context.user_data["tags"] = ", ".join(tag.strip().lower() for tag in tags.split(",")) if tags.lower() != "none" else ""
+
+#     date = context.user_data["date"]
+#     category = context.user_data["category"]
+#     description = context.user_data["description"]
+#     amount = context.user_data["amount"]
+#     tags = context.user_data["tags"]
+#     formatted_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m")
+
 #     try:
-#         spreadsheet = client.open('Expense Tracker')
-#         sheets = spreadsheet.worksheets()
-#         return [sheet.title for sheet in sheets]
-#     except Exception as e:
-#         logging.error(f"Error getting sheets: {e}")
-#         return ["expenses"]
+#         records = curr_sheet.get_all_records()
+#         next_id = len(records) + 1
+#         curr_sheet.append_row([next_id, date, category, description, amount, tags, formatted_date])
 
-# async def handle_new_sheet(update: Update, context: CallbackContext):
-#     """Handle the new category name for add or edit."""
-#     new_name = update.message.text.strip().capitalize()
-
-#     # if context.user_data["sheet_action"] == "add":
-#         # Add the category using the Google Sheets function
-#     result, message = add_sheet(new_name)
-#     await update.message.reply_text(message)
-    
-#     context.user_data.clear()  # Clear all user data
-#     context.user_data["in_conversation"] = False
-#     return ConversationHandler.END
-        
-# def add_sheet(sheet_name):
-#     "Adds a new sheet to the Google Sheets"
-#     try:
-#         spreadsheets = client.open('Expense Tracker')
-#         try:
-#             existing_sheet = spreadsheets.worksheet(sheet_name)
-#             return False, f"Sheet '{sheet_name}' already exists!"
-#         except:
-#             new_sheet = spreadsheets.add_worksheet(title=sheet_name, rows=1000, cols=20)
-            
-#             # Add headers to the new sheet (same as in expenses sheet)
-#             headers = ["ID", "Date", "Category", "Description", "Amount", "Tags", "Formated date"]
-#             new_sheet.append_row(headers)
-#             return True, f'Sheet {sheet_name} created successfully!'
-    
+#         await update.message.reply_text(
+#             f"Expense added successfully:\n"
+#             f"ID: {next_id}\n"
+#             f"Date: {date}\n"
+#             f"Category: {category}\n"
+#             f"Description: {description}\n"
+#             f"Amount: ${amount:.2f}\n"
+#             f"Tags: {tags if tags else 'None'}"
+#         )
 #     except Exception as e:
 #         logging.error(f"Error adding entry: {e}")
-#         return False, "Failed to add entry. Please try again later."
+#         await update.message.reply_text("Failed to add entry. Please try again later.")
 
-
-
-async def start_add(update: Update, context: CallbackContext):
-    """Initiate the add expense process."""
-    if not await ensure_not_in_conversation(update, context):
-        return ConversationHandler.END
-
-    context.user_data["in_conversation"] = True
-    reply_keyboard=[["Today", "Yesterday"]]
-    await update.message.reply_text("When did you spend this? (Select from the options or type in YYYY-MM-DD)", reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True, resize_keyboard=True))
-    return WHEN
-
-async def start_add_category(update: Update, context: CallbackContext):
-    """Initiate add category process"""
-    if not await ensure_not_in_conversation(update, context):
-        return ConversationHandler.END
-
-    context.user_data["in_conversation"] = True
-    await update.message.reply_text("Please enter the name of the new category:")
-    return ADD_CATEGORY
-
-async def save_new_category(update: Update, context: CallbackContext):
-    """Save the new category"""
-    new_category = update.message.text.strip().capitalize()
-    
-    # Check if category already exists
-    existing_categories = ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"] + custom_categories
-    
-    if new_category in existing_categories:
-        await update.message.reply_text(f"Category '{new_category}' already exists!")
-    else:
-        custom_categories.append(new_category)
-        await update.message.reply_text(f"Category '{new_category}' added successfully!")
-    
-    context.user_data["in_conversation"] = False
-    return ConversationHandler.END
-
-async def get_when(update: Update, context: CallbackContext):
-    """Handle the 'when' question."""
-    user_input = update.message.text.strip().lower()
-
-    if user_input == "today":
-        date = datetime.now().strftime("%Y-%m-%d")
-    elif user_input == "yesterday":
-        date = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
-    else:
-        try:
-            date = datetime.strptime(user_input, "%Y-%m-%d").strftime("%Y-%m-%d")
-        except ValueError:
-            await update.message.reply_text("Invalid date format. Please use YYYY-MM-DD, 'today', or 'yesterday'.")
-            return WHEN
-
-    context.user_data["date"] = date
-
-    # Send category selection keyboard with categories from Google Sheets
-    all_categories = get_all_categories()
-    
-    # Create rows of 3 categories each
-    category_rows = [all_categories[i:i+3] for i in range(0, len(all_categories), 3)]
-    
-    CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
-        category_rows,
-        one_time_keyboard=True,
-        resize_keyboard=True,
-    )
-    
-    await update.message.reply_text(
-        "What category of expense is this? (Choose from below):",
-        reply_markup=CATEGORY_KEYBOARD,
-    )
-    return CATEGORY
-
-async def get_category(update: Update, context: CallbackContext):
-    """Handle the 'category' question."""
-    context.user_data["category"] = update.message.text.strip().lower()
-    await update.message.reply_text("What did you spend on? (e.g., Lunch, Train ticket, etc.)")
-    return DESCRIPTION
-
-async def get_description(update: Update, context: CallbackContext):
-    """Handle the 'description' question."""
-    context.user_data["description"] = update.message.text.strip()
-    await update.message.reply_text("How much did you spend? (e.g., $12.50)")
-    return AMOUNT
-
-async def get_amount(update: Update, context: CallbackContext):
-    """Handle the 'amount' question."""
-    try:
-        context.user_data["amount"] = float(update.message.text.strip())
-    except ValueError:
-        await update.message.reply_text("Invalid amount. Please enter a numeric value (e.g., 12.50).")
-        return AMOUNT
-
-    await update.message.reply_text("Any tags you would like to add? (Separate by commas or type 'none')")
-    return TAGS
-
-async def get_tags(update: Update, context: CallbackContext):
-    """Handle the 'tags' question."""
-    tags = update.message.text.strip()
-    context.user_data["tags"] = ", ".join(tag.strip().lower() for tag in tags.split(",")) if tags.lower() != "none" else ""
-
-    date = context.user_data["date"]
-    category = context.user_data["category"]
-    description = context.user_data["description"]
-    amount = context.user_data["amount"]
-    tags = context.user_data["tags"]
-    formatted_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m")
-
-    try:
-        records = curr_sheet.get_all_records()
-        next_id = len(records) + 1
-        curr_sheet.append_row([next_id, date, category, description, amount, tags, formatted_date])
-
-        await update.message.reply_text(
-            f"Expense added successfully:\n"
-            f"ID: {next_id}\n"
-            f"Date: {date}\n"
-            f"Category: {category}\n"
-            f"Description: {description}\n"
-            f"Amount: ${amount:.2f}\n"
-            f"Tags: {tags if tags else 'None'}"
-        )
-    except Exception as e:
-        logging.error(f"Error adding entry: {e}")
-        await update.message.reply_text("Failed to add entry. Please try again later.")
-
-    context.user_data["in_conversation"] = False
-    return ConversationHandler.END
+#     context.user_data["in_conversation"] = False
+#     return ConversationHandler.END
 
 
 # Command: /query
@@ -807,17 +590,7 @@ async def get_expenses_by_category_all_time(update: Update, context: CallbackCon
         await update.message.reply
 
 # Conversation handlers
-add_expense_handler = ConversationHandler(
-    entry_points=[CommandHandler("add", start_add)],
-    states={
-        WHEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_when)],
-        CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_category)],
-        DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_description)],
-        AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_amount)],
-        TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_tags)],
-    },
-    fallbacks=[CommandHandler("cancel", global_cancel)],
-)
+
 
 query_expenses_handler = ConversationHandler(
     entry_points=[CommandHandler("query", start_query)],
@@ -839,166 +612,6 @@ table_expenses_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", global_cancel)],
 )
 
-handle_categories_handler = ConversationHandler(
-    entry_points=[CommandHandler("handlecategories", start_handle_categories)],
-    states={
-        CATEGORY_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category_action)],
-        SELECT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_category_selection)],
-        NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_category_name)],
-    },
-    fallbacks=[CommandHandler("cancel", global_cancel)],
-)
-
-# Category CRUD operations
-def get_all_categories():
-    """Get all categories from the Google Sheet."""
-    try:
-        # Get all values from the first column
-        category_cells = categories.col_values(1)
-        return category_cells
-    except Exception as e:
-        logging.error(f"Error getting categories: {e}")
-        return ["Food", "Travel", "Shopping", "Entertainment", "Utilities", "Other"]  # Default fallback
-
-# For the add_category function, modify to handle case insensitivity
-def add_category(category_name):
-    """Add a new category to the Google Sheet."""
-    try:
-        # Check if category already exists (case insensitive)
-        all_categories = get_all_categories()
-        # Convert all categories to lowercase for comparison
-        all_categories_lower = [cat.lower() for cat in all_categories]
-        
-        if category_name.lower() in all_categories_lower:
-            return False, f"Category '{category_name}' already exists!"
-        
-        # Add the new category to the next empty row
-        next_row = len(all_categories) + 1
-        categories.update_cell(next_row, 1, category_name.lower())
-        return True, f"Category '{category_name}' added successfully!"
-    except Exception as e:
-        logging.error(f"Error adding category: {e}")
-        return False, "Failed to add category due to an error."
-
-# For the update_category function, modify for case insensitivity
-def update_category(old_name, new_name):
-    """Update a category name in the Google Sheet."""
-    try:
-        # Check if new name already exists (case insensitive)
-        all_categories = get_all_categories()
-        all_categories_lower = [cat.lower() for cat in all_categories]
-        
-        if new_name.lower() in all_categories_lower and new_name.lower() != old_name.lower():
-            return False, f"Cannot rename to '{new_name}' as it already exists!"
-        
-        # Find the category to update
-        try:
-            # Find the exact match in the sheet
-            cell = None
-            for idx, category in enumerate(all_categories):
-                if category.lower() == old_name.lower():
-                    cell = categories.cell(idx+1, 1)
-                    break
-                    
-            if cell:
-                categories.update_cell(cell.row, 1, new_name)
-                return True, f"Category renamed from '{old_name}' to '{new_name}'."
-            else:
-                return False, f"Category '{old_name}' not found."
-        except Exception as e:
-            logging.error(f"Error finding category: {e}")
-            return False, f"Category '{old_name}' not found."
-    except Exception as e:
-        logging.error(f"Error updating category: {e}")
-        return False, "Failed to update category due to an error."
-
-# For the delete_category function, modify for case insensitivity
-def delete_category(category_name):
-    """Delete a category from the Google Sheet."""
-    try:
-        # Define default categories that cannot be deleted
-        default_categories = ["food", "travel", "shopping", "entertainment", "utilities", "other"]
-        if category_name.lower() in default_categories:
-            return False, f"Cannot delete default category '{category_name}'."
-        
-        # Find and delete the category
-        try:
-            # Find the category case-insensitively
-            all_categories = get_all_categories()
-            row_to_delete = None
-            
-            for idx, category in enumerate(all_categories):
-                if category.lower() == category_name.lower():
-                    row_to_delete = idx + 1
-                    break
-                    
-            if row_to_delete:
-                categories.delete_rows(row_to_delete)
-                return True, f"Category '{category_name}' has been deleted."
-            else:
-                return False, f"Category '{category_name}' not found."
-        except Exception as e:
-            logging.error(f"Error finding category to delete: {e}")
-            return False, f"Category '{category_name}' not found."
-    except Exception as e:
-        logging.error(f"Error deleting category: {e}")
-        return False, "Failed to delete category due to an error."
-
-# Now fix the handle_new_category_name function to properly end the conversation
-async def handle_new_category_name(update: Update, context: CallbackContext):
-    """Handle the new category name for add or edit."""
-    new_name = update.message.text.strip().capitalize()
-    
-    if context.user_data["category_action"] == "add":
-        # Add the category using the Google Sheets function
-        success, message = add_category(new_name)
-        await update.message.reply_text(message)
-        
-        # End the conversation
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-    
-    elif context.user_data["category_action"] == "edit":
-        selected_category = context.user_data["selected_category"]
-        
-        # Update the category using the Google Sheets function
-        success, message = update_category(selected_category, new_name)
-        await update.message.reply_text(message)
-        
-        # End the conversation
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-    
-    # If we get here, something went wrong, so end the conversation
-    context.user_data.clear()  # Clear all user data
-    context.user_data["in_conversation"] = False
-    return ConversationHandler.END
-
-# Also fix the handle_category_selection function to properly end after deletion
-async def handle_category_selection(update: Update, context: CallbackContext):
-    """Handle the selected category for edit or delete."""
-    selected_category = update.message.text.strip()
-    
-    # Store the selected category
-    context.user_data["selected_category"] = selected_category
-    
-    if context.user_data["category_action"] == "edit":
-        # For editing, ask for the new name
-        await update.message.reply_text(f"Enter the new name for '{selected_category}':")
-        return NEW_CATEGORY_NAME
-    
-    elif context.user_data["category_action"] == "delete":
-        # Delete the category using the Google Sheets function
-        success, message = delete_category(selected_category)
-        await update.message.reply_text(message)
-        
-        # End the conversation after deletion
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-
 # Main bot setup
 async def start_web_bot():
     """
@@ -1006,7 +619,7 @@ async def start_web_bot():
     """
     try:
         logging.info("Starting Google Sheets setup...")
-        setup_google_sheets()
+        sheet_manager, analysis, client = setup_google_sheets()
         logging.info("Google Sheets setup completed.")
 
         logging.info("Initializing Telegram bot...")
@@ -1018,25 +631,52 @@ async def start_web_bot():
         application = Application.builder().token(token).build()
         logging.info("Telegram bot initialized successfully.")
         
-        sheet_handlers = SheetHandlers(client, categories, curr_sheet)
-
-        curr_sheet_handler = ConversationHandler(
-            entry_points=[CommandHandler("handlesheets", sheet_handlers.start_curr_sheet)],
+        sheet_handler = SheetHandler(sheet_manager)
+        expense_handler = ExpenseHandler(sheet_manager)
+        category_handler = CategoryHandler(sheet_manager)
+        
+        # sheet_handler = SheetHandler(client, categories, curr_sheet)
+        sheet_convo_handler = ConversationHandler(
+            entry_points=[CommandHandler("handlesheets", sheet_handler.start_curr_sheet)],
             states={
-                SHEET_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handlers.handle_sheet_action)],
-                NEW_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handlers.handle_new_sheet)],
-                CHANGE_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handlers.handle_sheet_change)],
-                PICK_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handlers.handle_pick_sheet)],
+                SHEET_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_action)],
+                NEW_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_new_sheet)],
+                CHANGE_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_sheet_change)],
+                PICK_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, sheet_handler.handle_pick_sheet)],
+            },
+            fallbacks=[CommandHandler("cancel", global_cancel)],
+        )
+        
+        # category_handler = CategoryHandler(client, categories, curr_sheet)
+        categories_convo_handler = ConversationHandler(
+            entry_points=[CommandHandler("handlecategories", category_handler.start_handle_categories)],
+            states={
+                CATEGORY_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_action)],
+                SELECT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_category_selection)],
+                NEW_CATEGORY_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, category_handler.handle_new_category_name)],
+            },
+            fallbacks=[CommandHandler("cancel", global_cancel)],
+        )
+        
+        # expense_handler = ExpenseHandler(client, curr_sheet, categories)
+        expense_convo_handler = ConversationHandler(
+            entry_points=[CommandHandler("add", expense_handler.start_add)],
+            states={
+                WHEN: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_when)],
+                CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_category)],
+                DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_description)],
+                AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_amount)],
+                TAGS: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_handler.get_tags)],
             },
             fallbacks=[CommandHandler("cancel", global_cancel)],
         )
 
         
         # Add your handlers here
-        application.add_handler(add_expense_handler)
-        application.add_handler(curr_sheet_handler)
+        application.add_handler(expense_convo_handler)
+        application.add_handler(sheet_convo_handler)
         application.add_handler(query_expenses_handler)
-        application.add_handler(handle_categories_handler)
+        application.add_handler(categories_convo_handler)
         application.add_handler(CommandHandler("summary", summary))
         application.add_handler(table_expenses_handler)
         application.add_handler(CommandHandler("cancel", global_cancel))

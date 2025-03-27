@@ -11,11 +11,27 @@ SHEET_MANAGEMENT_KEYBOARD = ReplyKeyboardMarkup(
     resize_keyboard=True,
 )
 
-class SheetHandlers:
-    def __init__(self, client, categories, curr_sheet):
-        self.client = client
-        self.categories = categories
-        self.curr_sheet = curr_sheet
+class SheetHandler:
+    def __init__(self, sheet_manager):
+        self.sheet_manager = sheet_manager
+        self.client = sheet_manager.client
+        self.categories = sheet_manager.categories
+        self.curr_sheet = sheet_manager.current_sheet
+
+    async def handle_pick_sheet(self, update: Update, context: CallbackContext):
+        try:
+            sheet_name = update.message.text
+            if self.sheet_manager.set_current_sheet(sheet_name):
+                self.curr_sheet = self.sheet_manager.current_sheet
+                self.categories.update_cell(2, 3, sheet_name)
+                await update.message.reply_text(f"Switched to {sheet_name}")
+            else:
+                await update.message.reply_text("Failed to switch sheets. Please try again later.")
+        except Exception as e:
+            logging.error(f"Error getting sheets: {e}")
+            await update.message.reply_text("Failed to swap sheets. Please try again later.")
+        context.user_data["in_conversation"] = False
+        return ConversationHandler.END
 
     async def start_curr_sheet(self, update: Update, context: CallbackContext):
         if not await ensure_not_in_conversation(update, context):
@@ -51,18 +67,6 @@ class SheetHandlers:
         )
         return PICK_SHEET
 
-    async def handle_pick_sheet(self, update: Update, context: CallbackContext):
-        try:
-            context.user_data["selected_sheet"] = update.message.text
-            self.curr_sheet = self.client.open('Expense Tracker').worksheet(context.user_data["selected_sheet"])
-            self.categories.update_cell(2, 3, context.user_data["selected_sheet"])
-            await update.message.reply_text(f"Switched to {context.user_data['selected_sheet']}")
-        except Exception as e:
-            logging.error(f"Error getting sheets: {e}")
-            await update.message.reply_text("Failed to swap sheets. Please try again later.")
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-
     async def handle_new_sheet(self, update: Update, context: CallbackContext):
         new_name = update.message.text.strip().capitalize()
         result, message = self.add_sheet(new_name)
@@ -76,7 +80,7 @@ class SheetHandlers:
         try:
             spreadsheets = self.client.open('Expense Tracker')
             try:
-                existing_sheet = spreadsheets.worksheet(sheet_name)
+                spreadsheets.worksheet(sheet_name)
                 return False, f"Sheet '{sheet_name}' already exists!"
             except:
                 new_sheet = spreadsheets.add_worksheet(title=sheet_name, rows=1000, cols=20)
