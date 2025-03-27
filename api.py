@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from telegram import Update
 import logging
-from main import start_bot
+from main import start_web_bot
 
 app = FastAPI()
 
@@ -14,7 +14,7 @@ async def startup():
     global bot_app
     try:
         logging.info("Initializing bot...")
-        bot_app = await start_bot()
+        bot_app = await start_web_bot()
         if bot_app is None:
             logging.error("Bot failed to initialize.")
         else:
