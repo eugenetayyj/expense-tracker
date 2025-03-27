@@ -1,14 +1,14 @@
 import logging
 
 class SheetManager:
-    def __init__(self, client, categories):
+    def __init__(self, client):
         self.client = client
-        self.categories = categories
+        self.categories = client.open('Expense Tracker').worksheet('settings')
         self._curr_sheet = None
         self._observers = []
         
         # Initialize with default sheet
-        default_sheet = categories.col_values(3)[1]
+        default_sheet = self.categories.col_values(3)[1]
         self.set_current_sheet(default_sheet)
     
     def add_observer(self, observer):
