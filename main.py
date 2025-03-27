@@ -44,15 +44,16 @@ def setup_google_sheets():
         creds = Credentials.from_service_account_info(credentials_data, scopes=scope)
 
         # Authorize the client
+        global curr_sheet, analysis, categories, client
         client = gspread.authorize(creds)
-        global expenses, analysis, categories
         # Access the worksheets
-        expenses = client.open('Expense Tracker').worksheet('expenses')
+        categories = client.open('Expense Tracker').worksheet('settings')
+        default_sheet = categories.col_values(3)[1]
+        curr_sheet = client.open('Expense Tracker').worksheet(default_sheet)
         analysis = client.open('Expense Tracker').worksheet('analysis')
-        categories = client.open('Expense Tracker').worksheet('categories')
 
         logging.info("Google Sheets setup complete.")
-        return expenses, analysis, categories
+        return curr_sheet, analysis, categories, client
     except Exception as e:
         logging.error(f"Error setting up Google Sheets: {e}")
         raise
@@ -189,6 +190,111 @@ async def handle_new_category_name(update: Update, context: CallbackContext):
     context.user_data["in_conversation"] = False
     return ConversationHandler.END
 
+
+SHEET_MANAGEMENT_KEYBOARD = ReplyKeyboardMarkup(
+    [["Create", "Switch"]],
+    one_time_keyboard=True,
+    resize_keyboard=True,
+)
+
+SHEET_ACTION, NEW_SHEET, CHANGE_SHEET, PICK_SHEET = range(4)
+
+async def start_curr_sheet(update: Update, context: CallbackContext):
+    if not await ensure_not_in_conversation(update, context):
+        return ConversationHandler.END
+
+    context.user_data["in_conversation"] = True
+    await update.message.reply_text(
+        "What would you like to do with sheets?",
+        reply_markup=SHEET_MANAGEMENT_KEYBOARD,
+    )
+    return SHEET_ACTION
+
+async def handle_sheet_action(update: Update, context: CallbackContext):
+    """Handle the selected category action."""
+    action = update.message.text.strip()
+    
+    if action == "Create":
+        await update.message.reply_text("Please enter the name of the new sheet:")
+        # context.user_data["sheet_action"] = "add"
+        return NEW_SHEET
+    elif action == "Switch":
+        # await update.message.reply_text("Which sheet do you want to access?")
+        # context.user_data["sheet_action"] = "switch"
+        return await handle_sheet_change(update, context)
+            
+async def handle_sheet_change(update: Update, context: CallbackContext):
+    """Handle sheet change"""
+    all_sheets = [sheet for sheet in get_all_sheets() if sheet not in ["analysis", "settings"]]
+    sheet_rows = [all_sheets[i:i+3] for i in range(0, len(all_sheets), 3)]
+    SHEET_KEYBOARD = ReplyKeyboardMarkup(
+        sheet_rows,
+        one_time_keyboard=True,
+        resize_keyboard=True,
+    )
+    await update.message.reply_text(
+        "Which sheet do you want to access?",
+        reply_markup=SHEET_KEYBOARD,
+    )
+    return PICK_SHEET
+
+async def handle_pick_sheet(update: Update, context: CallbackContext):
+    """Handle the selected sheet."""
+    try:
+        context.user_data["selected_sheet"] = update.message.text
+        global curr_sheet
+        curr_sheet = client.open('Expense Tracker').worksheet(context.user_data["selected_sheet"])
+        categories.update_cell(2, 3, context.user_data["selected_sheet"])
+        await update.message.reply_text(f"Switched to {context.user_data['selected_sheet']}")
+    except Exception as e:
+        logging.error(f"Error getting sheets: {e}")
+        await update.message.reply_text("Failed to swap sheets. Please try again later.")
+    context.user_data["in_conversation"] = False
+    return ConversationHandler.END
+
+def get_all_sheets():
+    try:
+        spreadsheet = client.open('Expense Tracker')
+        sheets = spreadsheet.worksheets()
+        return [sheet.title for sheet in sheets]
+    except Exception as e:
+        logging.error(f"Error getting sheets: {e}")
+        return ["expenses"]
+
+
+
+async def handle_new_sheet(update: Update, context: CallbackContext):
+    """Handle the new category name for add or edit."""
+    new_name = update.message.text.strip().capitalize()
+
+    # if context.user_data["sheet_action"] == "add":
+        # Add the category using the Google Sheets function
+    result, message = add_sheet(new_name)
+    await update.message.reply_text(message)
+    
+    context.user_data.clear()  # Clear all user data
+    context.user_data["in_conversation"] = False
+    return ConversationHandler.END
+        
+def add_sheet(sheet_name):
+    "Adds a new sheet to the Google Sheets"
+    try:
+        spreadsheets = client.open('Expense Tracker')
+        try:
+            existing_sheet = spreadsheets.worksheet(sheet_name)
+            return False, f"Sheet '{sheet_name}' already exists!"
+        except:
+            new_sheet = spreadsheets.add_worksheet(title=sheet_name, rows=1000, cols=20)
+            
+            # Add headers to the new sheet (same as in expenses sheet)
+            headers = ["ID", "Date", "Category", "Description", "Amount", "Tags", "Formated date"]
+            new_sheet.append_row(headers)
+            return True, f'Sheet {sheet_name} created successfully!'
+    
+    except Exception as e:
+        logging.error(f"Error adding entry: {e}")
+        return False, "Failed to add entry. Please try again later."
+
 async def start_add(update: Update, context: CallbackContext):
     """Initiate the add expense process."""
     if not await ensure_not_in_conversation(update, context):
@@ -295,9 +401,9 @@ async def get_tags(update: Update, context: CallbackContext):
     formatted_date = datetime.strptime(date, "%Y-%m-%d").strftime("%Y-%m")
 
     try:
-        records = expenses.get_all_records()
+        records = curr_sheet.get_all_records()
         next_id = len(records) + 1
-        expenses.append_row([next_id, date, category, description, amount, tags, formatted_date])
+        curr_sheet.append_row([next_id, date, category, description, amount, tags, formatted_date])
 
         await update.message.reply_text(
             f"Expense added successfully:\n"
@@ -473,7 +579,7 @@ async def add_another_filter(update: Update, context: CallbackContext):
         return FILTER_TYPE
     elif user_input in no_responses:
         filters = context.user_data["filters"]
-        records = expenses.get_all_records()
+        records = curr_sheet.get_all_records()
         matching_records = records
 
         for filter_type, filter_value in filters.items():
@@ -737,6 +843,17 @@ handle_categories_handler = ConversationHandler(
     fallbacks=[CommandHandler("cancel", global_cancel)],
 )
 
+curr_sheet_handler = ConversationHandler(
+    entry_points=[CommandHandler("handlesheets", start_curr_sheet)],
+    states={
+        SHEET_ACTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sheet_action)],
+        NEW_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_new_sheet)],
+        CHANGE_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_sheet_change)],
+        PICK_SHEET: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_pick_sheet)],
+    },
+    fallbacks=[CommandHandler("cancel", global_cancel)],
+)
+
 # Category CRUD operations
 def get_all_categories():
     """Get all categories from the Google Sheet."""
@@ -888,78 +1005,80 @@ async def handle_category_selection(update: Update, context: CallbackContext):
         return ConversationHandler.END
 
 # Main bot setup
-async def start_bot():
-    """
-    Initialize and start the Telegram bot.
-    """
-    try:
-        logging.info("Starting Google Sheets setup...")
-        setup_google_sheets()
-        logging.info("Google Sheets setup completed.")
-
-        logging.info("Initializing Telegram bot...")
-        token = os.getenv("TELEGRAM_TOKEN")
-        if not token:
-            logging.error("TELEGRAM_TOKEN is missing!")
-            raise ValueError("TELEGRAM_TOKEN is not set.")
-        
-        application = Application.builder().token(token).build()
-        logging.info("Telegram bot initialized successfully.")
-        
-        # Add your handlers here
-        application.add_handler(add_expense_handler)
-        application.add_handler(query_expenses_handler)
-        application.add_handler(handle_categories_handler)
-        application.add_handler(CommandHandler("summary", summary))
-        application.add_handler(table_expenses_handler)
-        application.add_handler(CommandHandler("cancel", global_cancel))
-
-        await application.initialize()
-        return application
-    except Exception as e:
-        logging.error(f"Error initializing bot: {e}")
-        raise
-
-# polling
-# def main():
-#     """Start the bot in polling mode."""
+# async def start_bot():
+#     """
+#     Initialize and start the Telegram bot.
+#     """
 #     try:
-#         # Initialize Google Sheets
 #         logging.info("Starting Google Sheets setup...")
 #         setup_google_sheets()
 #         logging.info("Google Sheets setup completed.")
 
-#         # Get token
+#         logging.info("Initializing Telegram bot...")
 #         token = os.getenv("TELEGRAM_TOKEN")
 #         if not token:
 #             logging.error("TELEGRAM_TOKEN is missing!")
 #             raise ValueError("TELEGRAM_TOKEN is not set.")
         
-#         # Build application with polling
-#         application = (
-#             Application.builder()
-#             .token(token)
-#             .build()
-#         )
+#         application = Application.builder().token(token).build()
 #         logging.info("Telegram bot initialized successfully.")
         
-#         # Add handlers
+#         # Add your handlers here
 #         application.add_handler(add_expense_handler)
+#         applicatin.add_handler(curr_sheet_handler)
 #         application.add_handler(query_expenses_handler)
 #         application.add_handler(handle_categories_handler)
 #         application.add_handler(CommandHandler("summary", summary))
 #         application.add_handler(table_expenses_handler)
 #         application.add_handler(CommandHandler("cancel", global_cancel))
-        
-#         # Start the bot in polling mode
-#         logging.info("Starting bot in polling mode...")
-#         application.run_polling()
-        
-#         logging.info("Bot is running. Press Ctrl+C to stop.")
 
+#         await application.initialize()
+#         return application
 #     except Exception as e:
 #         logging.error(f"Error initializing bot: {e}")
 #         raise
 
-# if __name__ == "__main__":
-#     main()
+# polling
+def main():
+    """Start the bot in polling mode."""
+    try:
+        # Initialize Google Sheets
+        logging.info("Starting Google Sheets setup...")
+        setup_google_sheets()
+        logging.info("Google Sheets setup completed.")
+
+        # Get token
+        token = os.getenv("TELEGRAM_TOKEN")
+        if not token:
+            logging.error("TELEGRAM_TOKEN is missing!")
+            raise ValueError("TELEGRAM_TOKEN is not set.")
+        
+        # Build application with polling
+        application = (
+            Application.builder()
+            .token(token)
+            .build()
+        )
+        logging.info("Telegram bot initialized successfully.")
+        
+        # Add handlers
+        application.add_handler(add_expense_handler)
+        application.add_handler(curr_sheet_handler)
+        application.add_handler(query_expenses_handler)
+        application.add_handler(handle_categories_handler)
+        application.add_handler(CommandHandler("summary", summary))
+        application.add_handler(table_expenses_handler)
+        application.add_handler(CommandHandler("cancel", global_cancel))
+        
+        # Start the bot in polling mode
+        logging.info("Starting bot in polling mode...")
+        application.run_polling()
+        
+        logging.info("Bot is running. Press Ctrl+C to stop.")
+
+    except Exception as e:
+        logging.error(f"Error initializing bot: {e}")
+        raise
+
+if __name__ == "__main__":
+    main()
