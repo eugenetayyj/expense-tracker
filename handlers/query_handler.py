@@ -1,5 +1,3 @@
-import logging
-
 from telegram import ReplyKeyboardMarkup, Update
 from telegram.ext import CallbackContext, ConversationHandler
 from datetime import datetime
@@ -14,6 +12,7 @@ CATEGORY_KEYBOARD = ReplyKeyboardMarkup(
 )
 
 FILTER_TYPE, FILTER_VALUE, ADD_ANOTHER_FILTER, START_DATE, END_DATE = range(5)
+
 class QueryHandler:
     def __init__(self, sheet_manager):
         self.sheet_manager = sheet_manager

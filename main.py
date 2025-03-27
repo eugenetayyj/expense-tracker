@@ -1,18 +1,16 @@
 import logging
 import os
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, ConversationHandler, filters, CallbackContext
 import gspread
 from google.oauth2.service_account import Credentials
-from datetime import datetime
 import json
 from handlers.sheet_handler import (
     SHEET_ACTION, NEW_SHEET, CHANGE_SHEET, PICK_SHEET, SheetHandler
 )
 from handlers.category_handler import (CATEGORY_ACTION, SELECT_CATEGORY, NEW_CATEGORY_NAME, CategoryHandler)
 from handlers.expense_handler import (WHEN, CATEGORY, DESCRIPTION, AMOUNT, TAGS, ExpenseHandler)
-from handlers.utils import ensure_not_in_conversation, CONFIRM_KEYBOARD, get_all_categories
 from handlers.sheet_manager import SheetManager
 from handlers.analysis_manager import AnalysisManager
 from handlers.summary_handler import SummaryHandler

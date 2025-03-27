@@ -7,7 +7,6 @@ class SheetManager:
         self._curr_sheet = None
         self._observers = []
         
-        # Initialize with default sheet
         default_sheet = self.categories.col_values(3)[1]
         self.set_current_sheet(default_sheet)
     

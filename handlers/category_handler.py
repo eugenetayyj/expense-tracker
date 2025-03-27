@@ -17,62 +17,7 @@ class CategoryHandler:
         self.client = sheet_manager.client
         self.categories = sheet_manager.categories
         self.curr_sheet = sheet_manager.current_sheet
-
-    # Now fix the handle_new_category_name function to properly end the conversation
-    async def handle_new_category_name(self, update: Update, context: CallbackContext):
-        """Handle the new category name for add or edit."""
-        new_name = update.message.text.strip().capitalize()
         
-        if context.user_data["category_action"] == "add":
-            # Add the category using the Google Sheets function
-            success, message = self.add_category(new_name)
-            await update.message.reply_text(message)
-            
-            # End the conversation
-            context.user_data.clear()  # Clear all user data
-            context.user_data["in_conversation"] = False
-            return ConversationHandler.END
-        
-        elif context.user_data["category_action"] == "edit":
-            selected_category = context.user_data["selected_category"]
-            
-            # Update the category using the Google Sheets function
-            success, message = self.update_category(selected_category, new_name)
-            await update.message.reply_text(message)
-            
-            # End the conversation
-            context.user_data.clear()  # Clear all user data
-            context.user_data["in_conversation"] = False
-            return ConversationHandler.END
-        
-        # If we get here, something went wrong, so end the conversation
-        context.user_data.clear()  # Clear all user data
-        context.user_data["in_conversation"] = False
-        return ConversationHandler.END
-
-    # Also fix the handle_category_selection function to properly end after deletion
-    async def handle_category_selection(self, update: Update, context: CallbackContext):
-        """Handle the selected category for edit or delete."""
-        selected_category = update.message.text.strip()
-        
-        # Store the selected category
-        context.user_data["selected_category"] = selected_category
-        
-        if context.user_data["category_action"] == "edit":
-            # For editing, ask for the new name
-            await update.message.reply_text(f"Enter the new name for '{selected_category}':")
-            return NEW_CATEGORY_NAME
-        
-        elif context.user_data["category_action"] == "delete":
-            # Delete the category using the Google Sheets function
-            success, message = self.delete_category(selected_category)
-            await update.message.reply_text(message)
-            
-            # End the conversation after deletion
-            context.user_data.clear()  # Clear all user data
-            context.user_data["in_conversation"] = False
-            return ConversationHandler.END
-
     async def start_handle_categories(self, update: Update, context: CallbackContext):
         """Start the category management process."""
         if not await ensure_not_in_conversation(update, context):
@@ -94,7 +39,7 @@ class CategoryHandler:
             context.user_data["category_action"] = "add"
             return NEW_CATEGORY_NAME
         
-        elif action == "✏️ Edit Category" or action == "✏️ Edit  Category" or action == "🗑️ Delete Category":
+        elif action == "✏️ Edit Category" or action == "🗑️ Delete Category":
             # Get all categories from Google Sheets
             all_categories = get_all_categories(self.categories)
             
@@ -107,7 +52,7 @@ class CategoryHandler:
                 resize_keyboard=True,
             )
             
-            if action == "✏️ Edit Category" or action == "✏️ Edit  Category":
+            if action == "✏️ Edit Category":
                 await update.message.reply_text(
                     "Which category would you like to edit?",
                     reply_markup=category_keyboard,
@@ -128,6 +73,53 @@ class CategoryHandler:
                 reply_markup=CATEGORY_MANAGEMENT_KEYBOARD,
             )
             return CATEGORY_ACTION
+
+    async def handle_new_category_name(self, update: Update, context: CallbackContext):
+        """Handle the new category name for add or edit."""
+        new_name = update.message.text.strip().capitalize()
+        
+        if context.user_data["category_action"] == "add":
+            success, message = self.add_category(new_name)
+            await update.message.reply_text(message)
+            
+            # End the conversation
+            context.user_data.clear()  # Clear all user data
+            context.user_data["in_conversation"] = False
+            return ConversationHandler.END
+        
+        elif context.user_data["category_action"] == "edit":
+            selected_category = context.user_data["selected_category"]
+            
+            # Update the category using the Google Sheets function
+            success, message = self.update_category(selected_category, new_name)
+            await update.message.reply_text(message)
+            
+            # End the conversation
+            context.user_data.clear()
+            context.user_data["in_conversation"] = False
+            return ConversationHandler.END
+        
+        context.user_data.clear()
+        context.user_data["in_conversation"] = False
+        return ConversationHandler.END
+
+    async def handle_category_selection(self, update: Update, context: CallbackContext):
+        """Handle the selected category for edit or delete."""
+        selected_category = update.message.text.strip()
+        
+        context.user_data["selected_category"] = selected_category
+        
+        if context.user_data["category_action"] == "edit":
+            await update.message.reply_text(f"Enter the new name for '{selected_category}':")
+            return NEW_CATEGORY_NAME
+        
+        elif context.user_data["category_action"] == "delete":
+            success, message = self.delete_category(selected_category)
+            await update.message.reply_text(message)
+            
+            context.user_data.clear()  # Clear all user data
+            context.user_data["in_conversation"] = False
+            return ConversationHandler.END
 
     # For the add_category function, modify to handle case insensitivity
     def add_category(self, category_name):
